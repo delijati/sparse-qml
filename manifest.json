@@ -1,0 +1,19 @@
+{
+    "name": "sparse-qml.delijati",
+    "description": "description of sparse-qml",
+    "architecture": [
+        "armhf",
+        "i386",
+        "amd64"
+    ],
+    "title": "sparse-qml",
+    "hooks": {
+        "sparse-qml": {
+            "apparmor": "sparse-qml.apparmor",
+            "desktop": "sparse-qml.desktop"
+        }
+    },
+    "version": "0.0.1",
+    "maintainer": "Josip Delic <delijati@gmx.net>",
+    "framework": "ubuntu-sdk-15.04"
+}

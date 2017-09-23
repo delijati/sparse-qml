@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=sparse-qml
+Exec=qmlscene $@ Main.qml
+Icon=images/sparse-qml.png
+Terminal=false
+Type=Application
+X-Ubuntu-Touch=true
+
