@@ -95,9 +95,12 @@ class SparseManager(object):
     def on_message(self, room, event):
         if event['type'] == "m.room.message":
             if event['content']['msgtype'] == "m.text":
-                pyotherside.send('r.room.message', event)
-                print("{0}: {1}".format(
-                    event['sender'], event['content']['body']))
+                user = self.client.get_user(event["user_id"])
+                avatar_url = user.get_avatar_url()
+                event["avatar_url"] = avatar_url
+                pyotherside.send('r.room.message', {"event": event})
+                # print("{0}: {1}".format(
+                #     event['sender'], event['content']['body']))
 
         else:
             print(event['type'])

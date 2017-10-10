@@ -98,7 +98,7 @@ MainView {
                 console.log("python loaded");
             });
             setHandler('r.room.message', function (entry) {
-                console.log('New entries from ' + entry.sender + ' with ' + entry.content.body);
+                // console.log('New entries from ' + entry.sender + ' with ' + entry.content.body);
                 chatroom.model.append(entry);
             });
         }
