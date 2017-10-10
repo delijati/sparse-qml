@@ -28,9 +28,14 @@ MainView {
     property real margins: units.gu(2)
     property real buttonWidth: units.gu(9)
     property var path: []
+    property var activeRoomId: null
 
     RoomList {
         id: room_list
+    }
+
+    ChatRoom {
+        id: chatroom
     }
 
     LoginDialog {
@@ -92,7 +97,10 @@ MainView {
             importModule('backend', function(){
                 console.log("python loaded");
             });
-
+            setHandler('r.room.message', function (entry) {
+                console.log('New entries from ' + entry.sender + ' with ' + entry.content.body);
+                chatroom.model.append(entry);
+            });
         }
         onError: {
             console.log('Error: ' + traceback);

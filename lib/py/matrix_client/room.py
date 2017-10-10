@@ -1,7 +1,7 @@
 import re
-import collections
 from uuid import uuid4
 
+from .user import User
 from .errors import MatrixRequestError
 
 
@@ -34,6 +34,7 @@ class Room(object):
         self.aliases = []
         self.topic = None
         self._prev_batch = None
+        self._members = []
 
     def set_user_profile(self,
                          displayname=None,
@@ -58,6 +59,9 @@ class Room(object):
 
     @property
     def display_name(self):
+        """
+        Calculates the display name for a room.
+        """
         if self.name:
             return self.name
         elif self.canonical_alias:
@@ -65,19 +69,24 @@ class Room(object):
 
         members = self.get_joined_members()
         # members without me
-        print(members)
-        members = collections.OrderedDict({k: members[k] for k in members if
-                                           self.client.user_id != k})
-        first_two = list(members.values())[:2]
+        members = [u.get_display_name() for u in members if
+                   self.client.user_id != u.user_id]
+        first_two = members[:2]
         if len(first_two) == 1:
-            return first_two[0]["displayname"]
-        elif len(first_two) == 2:
-            return "{0} and {1}".format([x["displayname"] for x in
-                                         first_two])
-        elif len(first_two) > 2:
+            return first_two[0]
+        elif len(members) == 2:
+            return "{0} and {1}".format(
+                first_two[0],
+                first_two[1])
+        elif len(members) > 2:
             return "{0} and {1} others".format(
-                first_two[0]["displayname"],
-                first_two[1]["displayname"])
+                first_two[0],
+                first_two[1])
+        elif len(first_two) == 0:
+            # TODO i18n
+            return "Empty room"
+        # TODO i18n
+        return "Empty room"
 
     def send_text(self, text):
         """ Send a plain text message to the room.
@@ -493,14 +502,21 @@ class Room(object):
         Returns:
             {user_id: {"displayname": str or None}}: Dictionary of joined members.
         """
+        if self._members:
+            return self._members
         response = self.client.api.get_room_members(self.room_id)
-        rtn = collections.OrderedDict({
-            event["state_key"]: {
-                "displayname": event["content"].get("displayname"),
-            } for event in response["chunk"] if event["content"]["membership"] == "join"
-        })
+        for event in response["chunk"]:
+            if event["content"]["membership"] == "join":
+                self._mkmembers(
+                    User(self.client.api,
+                         event["state_key"],
+                         event["content"].get("displayname"))
+                )
+        return self._members
 
-        return rtn
+    def _mkmembers(self, member):
+        if member.user_id not in [x.user_id for x in self._members]:
+            self._members.append(member)
 
     def backfill_previous_messages(self, reverse=False, limit=10):
         """Backfill handling of previous messages.
