@@ -44,8 +44,13 @@ MainView {
         property var current: null
     }
 
+    Loading {
+        id: loading
+    }
+
     function login_end(data) {
         // XXX should we rather send signals?        
+        pageStack.pop(loading)
         PopupUtils.close(login_dialog.current)
         py.call("backend.mgr.get_rooms",  [], function(rooms) {
             // login
@@ -67,6 +72,7 @@ MainView {
             login_dialog.current = PopupUtils.open(login_dialog);
         }
         else {
+            pageStack.push(loading)
             py.call("backend.mgr.login_with_token",  [], function(rooms) {
                 console.log(rooms)
                 room_list.model.clear()
@@ -74,6 +80,7 @@ MainView {
                     console.log("Name: " + rooms[i].name)
                     room_list.model.append(rooms[i]);
                 }
+                pageStack.pop(loading)
                 pageStack.push(room_list)
             })
         }

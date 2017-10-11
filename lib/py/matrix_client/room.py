@@ -1,5 +1,6 @@
 import re
 from uuid import uuid4
+import collections
 
 from .user import User
 from .errors import MatrixRequestError
@@ -34,7 +35,7 @@ class Room(object):
         self.aliases = []
         self.topic = None
         self._prev_batch = None
-        self._members = []
+        self._members = collections.OrderedDict({})
 
     def set_user_profile(self,
                          displayname=None,
@@ -69,8 +70,8 @@ class Room(object):
 
         members = self.get_joined_members()
         # members without me
-        members = [u.get_display_name() for u in members if
-                   self.client.user_id != u.user_id]
+        members = [u.get_display_name() for k, u in members.items() if
+                   self.client.user_id != k]
         first_two = members[:2]
         if len(first_two) == 1:
             return first_two[0]
@@ -510,13 +511,14 @@ class Room(object):
                 self._mkmembers(
                     User(self.client.api,
                          event["state_key"],
-                         event["content"].get("displayname"))
+                         event["content"].get("displayname"),
+                         event["content"].get("avatar_url"))
                 )
         return self._members
 
     def _mkmembers(self, member):
-        if member.user_id not in [x.user_id for x in self._members]:
-            self._members.append(member)
+        if member.user_id not in self._members.keys():
+            self._members[member.user_id] = member
 
     def backfill_previous_messages(self, reverse=False, limit=10):
         """Backfill handling of previous messages.

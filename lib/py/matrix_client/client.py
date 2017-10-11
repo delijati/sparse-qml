@@ -409,7 +409,8 @@ class MatrixClient(object):
                 current_room._mkmembers(
                     User(self.api,
                          state_event["state_key"],
-                         state_event["content"].get("displayname", None))
+                         state_event["content"].get("displayname", None),
+                         state_event["content"].get("avatar_url", None))
                 )
 
         for listener in current_room.state_listeners:

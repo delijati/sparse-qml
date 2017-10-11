@@ -9,9 +9,6 @@ Component {
         title: i18n.tr("Login")
         text: i18n.tr("Login settings:")
 
-        property real value: 0.0
-        property bool progress_visible: false
-
         Label {
             width: parent.width
             text: i18n.tr("Matrix login settings")
@@ -46,11 +43,10 @@ Component {
                 color: UbuntuColors.orange
                 onClicked: {
                     console.log(url.text);                    
+                    pageStack.push(loading)
                     py.call("backend.mgr.login", [url.text, username.text, password.text], login_end);
                 }
             }
-
-
         }
     }
 }

@@ -57,13 +57,13 @@ class SparseManager(object):
         return self.get_rooms()
 
     def get_rooms(self):
-        rooms = self.client.get_rooms().values()
+        self.rooms = self.client.get_rooms()
         ids = [{"name": x.display_name,
                 "topic": x.topic,
-                "room_id": x.room_id} for x in rooms]
+                "room_id": x.room_id} for x in self.rooms.values()]
         return ids
 
-    def join_room(self, room_id):
+    def enter_room(self, room_id):
         import threading
         print("Threads running: %s self: %s" % (
             len(threading.enumerate()),
@@ -74,7 +74,8 @@ class SparseManager(object):
         if self.active_room:
             self.deactivate_room()
         try:
-            self.active_room = self.client.join_room(room_id)
+            #self.active_room = self.client.join_room(room_id)
+            self.active_room = self.rooms[room_id]
         except MatrixRequestError as e:
             print(e)
             if e.code == 400:
@@ -95,15 +96,19 @@ class SparseManager(object):
     def on_message(self, room, event):
         if event['type'] == "m.room.message":
             if event['content']['msgtype'] == "m.text":
-                user = self.client.get_user(event["user_id"])
-                avatar_url = user.get_avatar_url()
+                user = room._members.get(event["user_id"])
+                avatar_url = None
+                if user and user.avatar_url:
+                    avatar_url = user.avatar_url
+                elif user and not user.avatar_url:
+                    avatar_url = user.get_avatar_url()
                 event["avatar_url"] = avatar_url
                 pyotherside.send('r.room.message', {"event": event})
                 # print("{0}: {1}".format(
                 #     event['sender'], event['content']['body']))
 
         else:
-            print(event['type'])
+            print("type: %s content: %s" % (event['type'], event))
 
 
 def get_token_file_path(reset=False):
