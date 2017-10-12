@@ -1,13 +1,11 @@
-import sys
 import json
 import os
 import pyotherside
+import datetime
 
 from matrix_client.client import MatrixClient
-from matrix_client.api import MatrixRequestError
 from backend.config import FILENAME
 from backend.utils import create_path
-
 
 __version__ = "0.1.0"
 
@@ -25,26 +23,18 @@ class SparseManager(object):
         # token = client.register_with_password(username="foobar", password="monkey")
 
         # Existing user
-        try:
-            create_path(FILENAME)
-            token = self.client.login_with_password(username=username, password=password)
-            print("Logged in with token: {token}".format(token=token))
+        create_path(FILENAME)
+        token = self.client.login_with_password(
+            username=username, password=password)
+        print("Logged in with token: {token}".format(token=token))
 
-            with open(FILENAME, 'w') as f:
-                data = {
-                    'token': token,
-                    'user_id': self.client.user_id,
-                    'url': url
-                }
-                json.dump(data, f, ensure_ascii=False)
-
-        except MatrixRequestError as e:
-            # TODO handle also in GUI
-            print(e)
-            if e.code == 403:
-                print("Bad username or password.")
-            else:
-                print("Check your sever details are correct.")
+        with open(FILENAME, 'w') as f:
+            data = {
+                'token': token,
+                'user_id': self.client.user_id,
+                'url': url
+            }
+            json.dump(data, f, ensure_ascii=False)
 
         return token
 
@@ -73,20 +63,13 @@ class SparseManager(object):
             return
         if self.active_room:
             self.deactivate_room()
-        try:
-            #self.active_room = self.client.join_room(room_id)
-            self.active_room = self.rooms[room_id]
-        except MatrixRequestError as e:
-            print(e)
-            if e.code == 400:
-                print("Room ID/Alias in the wrong format")
-                sys.exit(11)
-            else:
-                print("Couldn't find room.")
-                sys.exit(12)
+
+        # self.active_room = self.client.join_room(room_id)
+
+        self.active_room = self.rooms[room_id]
         self.active_listener_id = self.active_room.add_listener(
             self.on_message)
-        self.active_room.backfill_previous_messages()
+        self.active_room.backfill_previous_messages(limit=20)
         self.client.start_listener_thread()
 
     def deactivate_room(self):
@@ -95,20 +78,24 @@ class SparseManager(object):
 
     def on_message(self, room, event):
         if event['type'] == "m.room.message":
-            if event['content']['msgtype'] == "m.text":
-                user = room._members.get(event["user_id"])
-                avatar_url = None
-                if user and user.avatar_url:
-                    avatar_url = user.avatar_url
-                elif user and not user.avatar_url:
-                    avatar_url = user.get_avatar_url()
-                event["avatar_url"] = avatar_url
-                pyotherside.send('r.room.message', {"event": event})
-                # print("{0}: {1}".format(
-                #     event['sender'], event['content']['body']))
-
-        else:
-            print("type: %s content: %s" % (event['type'], event))
+            if event["content"]["msgtype"] == "m.image":
+                event["image_url"] = self.client.api.get_download_url(
+                    event["content"]["url"])
+            user = room._members.get(event["user_id"])
+            avatar_url = None
+            displayname = None
+            if user and user.avatar_url:
+                avatar_url = user.avatar_url
+            if user and user.displayname:
+                displayname = user.displayname
+            # XXX to expensive take up to 2 sec member and message
+            # elif user and not user.avatar_url:
+            #     avatar_url = user.get_avatar_url()
+            event["time"] = datetime.datetime.fromtimestamp(
+                event["origin_server_ts"]/1000, datetime.timezone.utc)
+            event["avatar_url"] = avatar_url
+            event["displayname"] = displayname if displayname else event["sender"]
+            pyotherside.send('r.room.message', {"event": event})
 
 
 def get_token_file_path(reset=False):
