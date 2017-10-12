@@ -82,7 +82,7 @@ class Room(object):
         elif len(members) > 2:
             return "{0} and {1} others".format(
                 first_two[0],
-                first_two[1])
+                len(members) - 1)
         elif len(first_two) == 0:
             # TODO i18n
             return "Empty room"
@@ -519,6 +519,10 @@ class Room(object):
     def _mkmembers(self, member):
         if member.user_id not in self._members.keys():
             self._members[member.user_id] = member
+
+    def _rmmembers(self, user_id):
+        if user_id in self._members:
+            self._members.pop(user_id)
 
     def backfill_previous_messages(self, reverse=False, limit=10):
         """Backfill handling of previous messages.
