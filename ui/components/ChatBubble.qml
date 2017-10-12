@@ -171,7 +171,7 @@ Item {
          avatarText.visible = true
       }
 
-      if (event.user_id === "connection.userId() TODO") {
+      if (event.user_id === userId) {
          avatarIcon.anchors.right = chatBubble.right
          rect.anchors.right = avatarIcon.left
          rect.color = "#9E7D96"

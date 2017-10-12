@@ -41,11 +41,11 @@ BasePage {
                 onClicked: {
                     var room = room_list.model.get(index)
                     console.log("Room: " + room.name + " clicked")
-                    chatroom.model.clear()
+                    room_view.model.clear()
                     py.call("backend.mgr.enter_room",  [room.room_id], function() {
                         console.log("Entered room: " + room.name + " clicked")
-                        activeRoomId = room.room_id
-                        pageStack.push(chatroom)
+                        main.activeRoom = room
+                        pageStack.push(room_view)
                     }) 
                 }
             }

@@ -6,6 +6,7 @@ import "ui"
 
 
 MainView {
+    id: main
     // objectName for functional testing purposes (autopilot-qt5)
     objectName: "mainView" 
 
@@ -28,14 +29,15 @@ MainView {
     property real margins: units.gu(2)
     property real buttonWidth: units.gu(9)
     property var path: []
-    property var activeRoomId: null
+    property var activeRoom: null
+    property var userId: null
 
     RoomList {
         id: room_list
     }
 
-    ChatRoom {
-        id: chatroom
+    RoomView {
+        id: room_view
     }
 
     LoginDialog {
@@ -48,21 +50,25 @@ MainView {
         id: loading
     }
 
-    function login_end(data) {
-        // XXX should we rather send signals?        
-        pageStack.pop(loading)
-        PopupUtils.close(login_dialog.current)
+    function loadRooms() {
         py.call("backend.mgr.get_rooms",  [], function(rooms) {
-            // login
-            console.log(rooms)
             room_list.model.clear()
             for (var i=0; i < rooms.length; i++) {
                 console.log("Name: " + rooms[i].room_id)
                 room_list.model.append(rooms[i]);
             }
+            pageStack.pop(loading)
             pageStack.push(room_list)
             console.log("Logged In in gui")
         })
+    }
+
+    function login_end(data) {
+        // XXX should we rather send signals?        
+        pageStack.pop(loading)
+        PopupUtils.close(login_dialog.current)
+        main.userId = data.user_id
+        loadRooms()
     }
 
     function load_with_token(exists) {
@@ -73,15 +79,9 @@ MainView {
         }
         else {
             pageStack.push(loading)
-            py.call("backend.mgr.login_with_token",  [], function(rooms) {
-                console.log(rooms)
-                room_list.model.clear()
-                for (var i=0; i < rooms.length; i++) {
-                    console.log("Name: " + rooms[i].name)
-                    room_list.model.append(rooms[i]);
-                }
-                pageStack.pop(loading)
-                pageStack.push(room_list)
+            py.call("backend.mgr.login_with_token",  [], function(data) {
+                main.userId = data.user_id
+                loadRooms()
             })
         }
     }
@@ -106,7 +106,7 @@ MainView {
             });
             setHandler('r.room.message', function (entry) {
                 // console.log('New entries from ' + entry.sender + ' with ' + entry.content.body);
-                chatroom.model.append(entry);
+                room_view.model.append(entry);
             });
         }
         onError: {

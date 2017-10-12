@@ -28,15 +28,16 @@ class SparseManager(object):
             username=username, password=password)
         print("Logged in with token: {token}".format(token=token))
 
+        data = {
+            'token': token,
+            'user_id': self.client.user_id,
+            'url': url
+        }
+
         with open(FILENAME, 'w') as f:
-            data = {
-                'token': token,
-                'user_id': self.client.user_id,
-                'url': url
-            }
             json.dump(data, f, ensure_ascii=False)
 
-        return token
+        return data
 
     def login_with_token(self):
         with open(FILENAME, 'r') as f:
@@ -44,7 +45,7 @@ class SparseManager(object):
 
         self.client = MatrixClient(data["url"], user_id=data["user_id"],
                                    token=data["token"])
-        return self.get_rooms()
+        return data
 
     def get_rooms(self):
         self.rooms = self.client.get_rooms()
@@ -81,7 +82,11 @@ class SparseManager(object):
             if event["content"]["msgtype"] == "m.image":
                 event["image_url"] = self.client.api.get_download_url(
                     event["content"]["url"])
-            user = room._members.get(event["user_id"])
+            if event["sender"] == self.client.user_id:
+                user_id = self.client.user_id
+            else:
+                user_id = event["user_id"]
+            user = room._members.get(user_id)
             avatar_url = None
             displayname = None
             if user and user.avatar_url:
@@ -96,6 +101,9 @@ class SparseManager(object):
             event["avatar_url"] = avatar_url
             event["displayname"] = displayname if displayname else event["sender"]
             pyotherside.send('r.room.message', {"event": event})
+
+    def send_text(self, text):
+        self.active_room.send_text(text)
 
 
 def get_token_file_path(reset=False):

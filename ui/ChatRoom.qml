@@ -6,28 +6,36 @@ import Ubuntu.Components.ListItems 1.3 as ListItem
 import "components"
 
 
-BasePage {
+Rectangle {
     id: chatroom
-    title: i18n.tr('ChatRoom')
-    visible: false
 
     property var model: ListModel {}
 
-    Column {
-        anchors {
-            fill: parent
-            margins: units.gu(2)
+    ListView {
+        id: chatlist
+        clip: true
+        anchors.fill: parent
+        model: chatroom.model
+
+        delegate: ChatBubble {
+            id: chatBubble
+            width: parent.width
         }
 
-        ListView {
-            clip: true
-            anchors.fill: parent
-            model: chatroom.model
+        onAtYBeginningChanged: {
+            // TODO scroll load more
+            // if(currentRoom && atYBeginning) currentRoom.getPreviousContent(50)
+        }
 
-            delegate: ChatBubble {
-                id: chatBubble
-                width: parent.width
-            }
+        Scrollbar {
+            align: Qt.AlignTrailing
+        }
+
+        onCountChanged: {
+            var newIndex = count - 1 // last index
+            // jump to end
+            positionViewAtEnd()
+            currentIndex = newIndex
         }
     }
 }
