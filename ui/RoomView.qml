@@ -3,7 +3,7 @@ import Ubuntu.Components 1.3
 
 BasePage {
     id: roomView
-    title: main.activeRoom.name
+    title: main.activeRoom ? main.activeRoom.name : ""
     visible: false
 
     property var model: ListModel {}

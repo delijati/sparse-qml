@@ -1,6 +1,5 @@
 import QtQuick 2.4
 import Ubuntu.Components 1.3
-import QtQuick.XmlListModel 2.0
 import QtGraphicalEffects 1.0
 import Ubuntu.Components.ListItems 1.3 as ListItem
 import "components"
@@ -23,19 +22,24 @@ Rectangle {
         }
 
         onAtYBeginningChanged: {
-            // TODO scroll load more
-            // if(currentRoom && atYBeginning) currentRoom.getPreviousContent(50)
+            if(atYBeginning) {
+                console.log("Show more older messages ...")
+                // console.log("main: " + py)
+                // py.call("backend.mgr.get_next_messages", [], function(start) {
+                //     console.log(start)
+                // });
+            }
         }
 
         Scrollbar {
             align: Qt.AlignTrailing
         }
 
-        onCountChanged: {
-            var newIndex = count - 1 // last index
-            // jump to end
-            positionViewAtEnd()
-            currentIndex = newIndex
-        }
+        // onCountChanged: {
+        //     var newIndex = count - 1 // last index
+        //     // jump to end
+        //     positionViewAtEnd()
+        //     currentIndex = newIndex
+        // }
     }
 }

@@ -63,7 +63,7 @@ Item {
 
       Text {
          id: contentlabel
-         text: event.content.body
+         text: event.body
          wrapMode: Text.Wrap
          font.pointSize: units.gu(1.5)
          anchors.left: parent.left
@@ -147,7 +147,7 @@ Item {
       }
 
       Component.onCompleted: {
-         if (event.content.msgtype === "m.image"){
+         if (event.msgtype === "image"){
             contentImage.width = chatBubble.width - avatarIcon.width - 40 - 30
             width = Math.max(contentImage.width, innerRect.width) + 30
             height = Math.max(contentImage.height + innerRect.height + 40, avatarIcon.height)
@@ -157,7 +157,7 @@ Item {
             width = Math.max(contentlabel.width, innerRect.width) + 30
             height = Math.max(contentlabel.height + innerRect.height + 40, avatarIcon.height)
          }
-         checkForLink(event.content.body);
+         checkForLink(event.body);
       }
    }
 
@@ -184,7 +184,7 @@ Item {
          rect.anchors.left = avatarIcon.right
       }
 
-      if (event.content.msgtype === "m.image") {
+      if (event.msgtype === "image") {
          console.log("Url: " + event.image_url)
          contentImage.sourceSize = "1000x1000"
          contentImage.source = event.image_url;
