@@ -86,6 +86,7 @@ class MatrixClient(object):
         self.api = MatrixHttpApi(base_url, token)
         self.api.validate_certificate(valid_cert_check)
         self.listeners = []
+        self.presence_listeners = {}
         self.invite_listeners = []
         self.left_listeners = []
         self.ephemeral_listeners = []
@@ -278,6 +279,28 @@ class MatrixClient(object):
         self.listeners[:] = (listener for listener in self.listeners
                              if listener['uid'] != uid)
 
+    def add_presence_listener(self, callback):
+        """ Add a presence listener that will send a callback when the client receives
+        a presence update.
+
+        Args:
+            callback (func(roomchunk)): Callback called when a presence update arrives.
+
+        Returns:
+            uuid.UUID: Unique id of the listener, can be used to identify the listener.
+        """
+        listener_uid = uuid4()
+        self.presence_listeners[listener_uid] = callback
+        return listener_uid
+
+    def remove_presence_listener(self, uid):
+        """ Remove presence listener with given uid
+
+        Args:
+            uuid.UUID: Unique id of the listener to remove
+        """
+        self.presence_listeners.pop(uid)
+
     def add_ephemeral_listener(self, callback, event_type=None):
         """ Add an ephemeral listener that will send a callback when the client recieves
         an ephemeral event.
@@ -423,10 +446,13 @@ class MatrixClient(object):
                 listener['callback'](state_event)
 
     def _sync(self, timeout_ms=30000):
-        # TODO: Deal with presence
         # TODO: Deal with left rooms
         response = self.api.sync(self.sync_token, timeout_ms, filter=self.sync_filter)
         self.sync_token = response["next_batch"]
+
+        for presence_update in response['presence']['events']:
+            for callback in self.presence_listeners.values():
+                callback(presence_update)
 
         for room_id, invite_room in response['rooms']['invite'].items():
             for listener in self.invite_listeners:
@@ -443,6 +469,9 @@ class MatrixClient(object):
                 self._mkroom(room_id)
             room = self.rooms[room_id]
             room.prev_batch = sync_room["timeline"]["prev_batch"]
+
+            # TODO handle unread messages look into https://github.com/matrix-org/matrix-react-sdk/blob/f58d89ef802f28bbab851fe63c3e6ff332394a5d/src/Unread.js#L41
+            # print("Notifications: %s" % sync_room["unread_notifications"])
 
             for event in sync_room["state"]["events"]:
                 event['room_id'] = room_id
@@ -461,6 +490,11 @@ class MatrixClient(object):
                         listener['callback'](event)
 
             for event in sync_room['ephemeral']['events']:
+                event["has_unread_messages"] = self.has_unread_messages(
+                    event, sync_room["timeline"]["events"])
+
+                print("Room %s unread: %s" % (room.name or room_id, event["has_unread_messages"]))
+
                 event['room_id'] = room_id
                 room._put_ephemeral_event(event)
 
@@ -470,6 +504,41 @@ class MatrixClient(object):
                         listener['event_type'] == event['type']
                     ):
                         listener['callback'](event)
+
+    def read_up_to_id(self, event):
+        ret = None
+        for k, v in event["content"].items():
+            if "m.read" in v and self.user_id in v["m.read"]:
+                ret = k
+                break
+        return ret
+
+    def has_unread_messages(self, event, timeline):
+        read_up_to_id = self.read_up_to_id(event)
+
+        if (timeline and timeline[-1:][0].get("sender") and
+                timeline[-1:][0]["sender"] == self.user_id):
+            return False
+        for ev in timeline:
+            if ev["event_id"] == read_up_to_id:
+                return False
+            elif self.event_triggers_unread_count(ev):
+                return True
+        return True
+
+    def event_triggers_unread_count(self, ev):
+        if ev["sender"] == self.user_id:
+            return False
+        elif ev["type"] == 'm.room.member':
+            return False
+        elif ev["type"] == 'm.call.answer':
+            return False
+        elif ev["type"] == 'm.call.hangup':
+            return False
+        elif (ev["type"] == 'm.room.message' and
+              ev["content"]["msgtype"] == 'm.notify'):
+            return False
+        return True
 
     def get_user(self, user_id):
         """ Return a User by their id.

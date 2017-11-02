@@ -16,7 +16,7 @@
 import json
 import requests
 from time import time, sleep
-from .errors import MatrixError, MatrixRequestError
+from .errors import MatrixError, MatrixRequestError, MatrixHttpLibError
 
 try:
     from urllib import quote
@@ -240,6 +240,28 @@ class MatrixHttpApi(object):
         if timestamp:
             params["ts"] = timestamp
         return self._send("PUT", path, content, query_params=params)
+
+    def redact_event(self, room_id, event_id, reason, txn_id=None, timestamp=None):
+        """Perferm PUT /rooms/$room_id/redact/$event_id/$txn_id/
+
+        Args:
+            room_id(str): The room ID to redact the message event in.
+            event_id(str): The event id to redact.
+            reason(str): The reason the message was redacted.
+            txn_id(int): Optional. The transaction ID to use.
+            timestamp(int): Optional. Set origin_server_ts (For application services only)
+        """
+        if not txn_id:
+            txn_id = str(self.txn_id) + str(int(time() * 1000))
+
+        self.txn_id = self.txn_id + 1
+        path = '/rooms/%s/redact/%s/%s' % (
+            room_id, event_id, txn_id
+        )
+        params = {}
+        if timestamp:
+            params["ts"] = timestamp
+        return self._send("PUT", path, {"reason": reason}, query_params=params)
 
     # content_type can be a image,audio or video
     # extra information should be supplied, see
@@ -563,13 +585,16 @@ class MatrixHttpApi(object):
 
         response = None
         while True:
-            response = requests.request(
-                method, endpoint,
-                params=query_params,
-                data=content,
-                headers=headers,
-                verify=self.validate_cert
-            )
+            try:
+                response = requests.request(
+                    method, endpoint,
+                    params=query_params,
+                    data=content,
+                    headers=headers,
+                    verify=self.validate_cert
+                )
+            except requests.exceptions.RequestException as e:
+                raise MatrixHttpLibError(e, method, endpoint)
 
             if response.status_code == 429:
                 sleep(response.json()['retry_after_ms'] / 1000)

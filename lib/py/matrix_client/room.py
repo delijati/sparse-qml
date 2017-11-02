@@ -221,6 +221,20 @@ class Room(object):
         return self.client.api.send_content(self.room_id, url, name, "m.audio",
                                             extra_information=audioinfo)
 
+    def redact_message(self, event_id, reason=None):
+        """ Redacts the message with specified event_id in the room.
+        See https://matrix.org/docs/spec/r0.0.1/client_server.html#id112
+
+        Args:
+            event_id (str): The id of the event to be redacted.
+            reason (str): Optional. The reason provided for the redaction.
+        """
+        content = {}
+        if reason:
+            content['reason'] = reason
+        return self.client.api.send_redact_event(self.room_id, event_id,
+                                                 content)
+
     def add_listener(self, callback, event_type=None):
         """ Add a callback handler for events going to this room.
 
@@ -541,12 +555,12 @@ class Room(object):
             self._put_event(event)
 
     def get_room_messages(self, reverse=False, limit=10, start=None):
-        """Backfill handling of previous messages.
+        """Get messages.
 
         Args:
-            reverse (bool): When false messages will be backfilled in their original
+            reverse (bool): When false messages will be filled in their original
                 order (old to new), otherwise the order will be reversed (new to old).
-            limit (int): Number of messages to go back.
+            limit (int): Number of messages.
             start (str): The token to start returning events from.
         """
         res = self.client.api.get_room_messages(self.room_id, start,
