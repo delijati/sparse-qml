@@ -1,6 +1,5 @@
 import QtQuick 2.4
 import Ubuntu.Components 1.3
-import Ubuntu.Components.ListItems 1.3 as ListItem
 
 
 BasePage {
@@ -20,9 +19,7 @@ BasePage {
             clip: true
             anchors.fill: parent
             model: room_list.model
-            delegate: ListItem.Standard {
-
-                progression: true
+            delegate: ListItem {
                 Row {
                     id: rowItem
                     anchors.verticalCenter: parent.verticalCenter
@@ -48,7 +45,6 @@ BasePage {
                     }) 
                 }
             }
-
         }
     }
 }
