@@ -34,6 +34,7 @@ class Room(object):
         self.canonical_alias = None
         self.aliases = []
         self.topic = None
+        self.has_unread_messages = None
         self._prev_batch = None
         self._members = collections.OrderedDict({})
 

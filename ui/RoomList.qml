@@ -32,6 +32,7 @@ BasePage {
                     Label {
                         anchors.verticalCenter: parent.verticalCenter
                         text: name
+                        font.bold: has_unread_messages
                     }
                 }
                 onClicked: {
@@ -41,6 +42,7 @@ BasePage {
                     py.call("backend.mgr.enter_room",  [room.room_id], function() {
                         console.log("Entered room: " + room.name + " clicked")
                         main.activeRoom = room
+                        room.has_unread_messages = false
                         pageStack.push(room_view)
                     }) 
                 }

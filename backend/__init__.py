@@ -50,9 +50,12 @@ class SparseManager(object):
 
     def get_rooms(self):
         self.rooms = self.client.get_rooms()
-        ids = [{"name": x.display_name,
-                "topic": x.topic,
-                "room_id": x.room_id} for x in self.rooms.values()]
+        ids = [{
+            "name": x.display_name,
+            "topic": x.topic,
+            "room_id": x.room_id,
+            "has_unread_messages": x.has_unread_messages
+        } for x in self.rooms.values()]
         return ids
 
     def enter_room(self, room_id):
@@ -75,7 +78,7 @@ class SparseManager(object):
         self.client.start_listener_thread()
 
     def get_next_messages(self):
-        # TODO prepend at beginning 
+        # TODO prepend at beginning
         self.active_start = self.active_room.get_room_messages(
             limit=20, start=self.active_start
         )
@@ -114,7 +117,7 @@ class SparseManager(object):
             # elif user and not user.avatar_url:
             #     avatar_url = user.get_avatar_url()
             to_send["time"] = datetime.datetime.fromtimestamp(
-                event["origin_server_ts"]/1000, datetime.timezone.utc)
+                event["origin_server_ts"] / 1000, datetime.timezone.utc)
             to_send["avatar_url"] = avatar_url
             to_send["displayname"] = displayname if displayname else event["sender"]
             pyotherside.send('r.room.message', {"event": to_send})

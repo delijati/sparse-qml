@@ -489,12 +489,14 @@ class MatrixClient(object):
                     ):
                         listener['callback'](event)
 
+            room.has_unread_messages = None
+
             for event in sync_room['ephemeral']['events']:
-                event["has_unread_messages"] = self.has_unread_messages(
-                    event, sync_room["timeline"]["events"])
-
-                print("Room %s unread: %s" % (room.name or room_id, event["has_unread_messages"]))
-
+                if room.has_unread_messages is None:
+                    room.has_unread_messages = self.has_unread_messages(
+                        event, sync_room["timeline"]["events"])
+                    print("Room %s unread: %s" % (room.name or room_id,
+                                                  room.has_unread_messages))
                 event['room_id'] = room_id
                 room._put_ephemeral_event(event)
 
@@ -522,7 +524,7 @@ class MatrixClient(object):
         for ev in timeline:
             if ev["event_id"] == read_up_to_id:
                 return False
-            elif self.event_triggers_unread_count(ev):
+            elif self.event_triggers_unread_count(ev) and ev["type"] == "m.room.member":
                 return True
         return True
 
