@@ -682,3 +682,11 @@ class MatrixHttpApi(object):
             room_id (str): The room to get the member events for.
         """
         return self._send("GET", "/rooms/{}/members".format(quote(room_id)))
+
+    # https://matrix.org/docs/spec/client_server/r0.2.0.html#voice-over-ip
+    def get_turn_server(self):
+        """Get TURN server
+        TODO username, password, urls
+
+        """
+        return self._send("GET", "/voip/turnServer")
