@@ -74,7 +74,8 @@ class SparseManager(object):
         self.active_room = self.rooms[room_id]
         self.active_listener_id = self.active_room.add_listener(
             self.on_message)
-        self.active_room.get_room_messages(limit=20)
+        self.active_start = self.active_room.get_room_messages(limit=20)
+        print("Message end: %s" % self.active_start)
         self.client.start_listener_thread()
 
     def get_next_messages(self):
@@ -116,14 +117,16 @@ class SparseManager(object):
             # XXX to expensive take up to 2 sec member and message
             # elif user and not user.avatar_url:
             #     avatar_url = user.get_avatar_url()
+            to_send["origin_server_ts"] = event["origin_server_ts"]
             to_send["time"] = datetime.datetime.fromtimestamp(
                 event["origin_server_ts"] / 1000, datetime.timezone.utc)
             to_send["avatar_url"] = avatar_url
             to_send["displayname"] = displayname if displayname else event["sender"]
             pyotherside.send('r.room.message', {"event": to_send})
         else:
-            print(event["type"])
-            print(event)
+            pass
+            # print(event["type"])
+            # print(event)
 
     def send_text(self, text):
         self.active_room.send_text(text)
