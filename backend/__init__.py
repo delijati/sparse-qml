@@ -107,6 +107,10 @@ class SparseManager(object):
                 to_send["body"] = event["content"]["body"]
             elif "ciphertext" in event["content"]:
                 to_send["body"] = "... encrypted ..."
+            else:
+                to_send["body"] = "... no message ..."
+            if "redacted_because" in event:
+                to_send["body"] = "... redacted ..."
             user = room._members.get(user_id)
             avatar_url = None
             displayname = None
