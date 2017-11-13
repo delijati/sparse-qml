@@ -95,6 +95,18 @@ MainView {
         }
     }
 
+    function insertionSortByKey(model, key) {
+        var length = model.count;
+
+        for(var i = 1; i < length; i++) {
+            var temp = model.get(i).event;
+            for(var j = i - 1; j >= 0 && model.get(j).event[key] > temp[key]; j--) {
+                model.move(j, j+1, 1);
+            }
+        }
+        return model;
+    }
+
     Python {
         id: py
         Component.onCompleted: {
@@ -106,17 +118,9 @@ MainView {
             });
             setHandler('r.room.message', function (entry) {
                 // console.log('New entries from ' + entry.sender + ' with ' + entry.content.body);
-                console.log("len: "+ room_view.model.get(0))
-                // if (room_view.model.count > 0 && entry.time < room_view.model.get(room_view.model.count-1).time) {
-                if (room_view.model.count > 0 && entry.event.origin_server_ts < room_view.model.get(0).event.origin_server_ts) {
-                    console.log(entry.event.origin_server_ts)
-                    console.log(room_view.model.get(0).event.origin_server_ts)
-                    console.log(room_view.model.get(0).event.body)
-                    console.log("Mee here")
-                    room_view.model.insert(0, entry);
-                } else {
-                    room_view.model.append(entry);
-                }
+                room_view.model.append(entry);
+                // TODO we sort now on every new message event :/
+                insertionSortByKey(room_view.model, "origin_server_ts")
             });
         }
         onError: {

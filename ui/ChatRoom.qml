@@ -23,10 +23,10 @@ Rectangle {
 
         onAtYBeginningChanged: {
             if (main.activeRoom && atYBeginning) {
-                console.log("Show more older messages ...")
-                console.log("main: " + main.activeRoom)
+                // console.log("Show more older messages ...")
+                // console.log("main: " + main.activeRoom)
                 py.call("backend.mgr.get_next_messages", [], function(start) {
-                    console.log("start: " + start)
+                    // console.log("start: " + start)
                 });
             }
         }
