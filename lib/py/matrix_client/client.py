@@ -99,6 +99,7 @@ class MatrixClient(object):
         self.rooms = {
             # room_id: Room
         }
+        self.user_id = None
         if token:
             self.user_id = user_id
             self._sync()
