@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright 2015 OpenMarket Ltd
+# Copyright 2017, 2018 Adam Beckmeyer
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +15,13 @@
 # limitations under the License.
 
 import json
-import requests
+import warnings
+from requests import Session, RequestException
 from time import time, sleep
+from .__init__ import __version__
 from .errors import MatrixError, MatrixRequestError, MatrixHttpLibError
+from urllib3.util import parse_url
+from urllib3.exceptions import LocationParseError
 
 try:
     from urllib import quote
@@ -35,6 +40,11 @@ class MatrixHttpApi(object):
         base_url (str): The home server URL e.g. 'http://localhost:8008'
         token (str): Optional. The client's access token.
         identity (str): Optional. The mxid to act as (For application services only).
+        default_429_wait_ms (int): Optional. Time in millseconds to wait before retrying
+                                             a request when server returns a HTTP 429
+                                             response without a 'retry_after_ms' key.
+        use_authorization_header (bool): Optional. Use Authorization header instead
+                `                        of access_token query parameter.
 
     Examples:
         Create a client and send a message::
@@ -44,12 +54,26 @@ class MatrixHttpApi(object):
             response = matrix.send_message("!roomid:matrix.org", "Hello!")
     """
 
-    def __init__(self, base_url, token=None, identity=None):
-        self.base_url = base_url
+    def __init__(
+            self, base_url, token=None, identity=None,
+            default_429_wait_ms=5000,
+            use_authorization_header=True
+    ):
+        try:
+            scheme, auth, host, port, path, query, fragment = parse_url(base_url)
+        except LocationParseError:
+            raise MatrixError("Invalid homeserver url %s" % base_url)
+        if not scheme:
+            raise MatrixError("No scheme in homeserver url %s" % base_url)
+        self._base_url = base_url
+
         self.token = token
         self.identity = identity
         self.txn_id = 0
         self.validate_cert = True
+        self.session = Session()
+        self.default_429_wait_ms = default_429_wait_ms
+        self.use_authorization_header = use_authorization_header
 
     def initial_sync(self, limit=1):
         """
@@ -62,6 +86,7 @@ class MatrixHttpApi(object):
         Args:
             limit (int): The limit= param to provide.
         """
+        warnings.warn("initial_sync is deprecated. Use sync instead.", DeprecationWarning)
         return self._send("GET", "/initialSync", query_params={"limit": limit})
 
     def sync(self, since=None, timeout_ms=30000, filter=None,
@@ -89,7 +114,7 @@ class MatrixHttpApi(object):
             request["filter"] = filter
 
         if full_state:
-            request["full_state"] = full_state
+            request["full_state"] = json.dumps(full_state)
 
         if set_presence:
             request["set_presence"] = set_presence
@@ -100,7 +125,7 @@ class MatrixHttpApi(object):
     def validate_certificate(self, valid):
         self.validate_cert = valid
 
-    def register(self, content={}, kind='user'):
+    def register(self, content=None, kind='user'):
         """Performs /register.
 
         Args:
@@ -121,11 +146,14 @@ class MatrixHttpApi(object):
                 |     session (string):  The value of the session key given by the
                 |         homeserver.
 
-                |     type (string):  Required. The login type that the client is attempting
-                |         to complete. "m.login.dummy" is the only non-interactive type.
+                |     type (string): Required. The login type that the client is
+                |         attempting to complete. "m.login.dummy" is the only
+                |         non-interactive type.
 
             kind (str): Specify kind="guest" to register as guest.
         """
+        if content is None:
+            content = {}
         return self._send(
             "POST",
             "/register",
@@ -144,7 +172,8 @@ class MatrixHttpApi(object):
             "type": login_type
         }
         for key in kwargs:
-            content[key] = kwargs[key]
+            if kwargs[key]:
+                content[key] = kwargs[key]
 
         return self._send("POST", "/login", content)
 
@@ -153,13 +182,23 @@ class MatrixHttpApi(object):
         """
         return self._send("POST", "/logout")
 
-    def create_room(self, alias=None, is_public=False, invitees=()):
+    def create_room(
+                self,
+                alias=None,
+                name=None,
+                is_public=False,
+                invitees=None,
+                federate=None
+            ):
         """Perform /createRoom.
 
         Args:
             alias (str): Optional. The room alias name to set for this room.
+            name (str): Optional. Name for new room.
             is_public (bool): Optional. The public/private visibility.
             invitees (list<str>): Optional. The list of user IDs to invite.
+            federate (bool): Optional. Сan a room be federated.
+                Default to True.
         """
         content = {
             "visibility": "public" if is_public else "private"
@@ -168,6 +207,10 @@ class MatrixHttpApi(object):
             content["room_alias_name"] = alias
         if invitees:
             content["invite"] = invitees
+        if name:
+            content["name"] = name
+        if federate is not None:
+            content["creation_content"] = {'m.federate': federate}
         return self._send("POST", "/createRoom", content)
 
     def join_room(self, room_id_or_alias):
@@ -191,6 +234,8 @@ class MatrixHttpApi(object):
             from_token (str): The 'from' query parameter.
             timeout (int): Optional. The 'timeout' query parameter.
         """
+        warnings.warn("event_stream is deprecated. Use sync instead.",
+                      DeprecationWarning)
         path = "/events"
         return self._send(
             "GET", path, query_params={
@@ -208,7 +253,7 @@ class MatrixHttpApi(object):
             event_type(str): The state event type to send.
             content(dict): The JSON content to send.
             state_key(str): Optional. The state key for the event.
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         path = "/rooms/%s/state/%s" % (
             quote(room_id), quote(event_type),
@@ -220,6 +265,18 @@ class MatrixHttpApi(object):
             params["ts"] = timestamp
         return self._send("PUT", path, content, query_params=params)
 
+    def get_state_event(self, room_id, event_type):
+        """Perform GET /rooms/$room_id/state/$event_type
+
+        Args:
+            room_id(str): The room ID.
+            event_type (str): The type of the event.
+
+        Raises:
+            MatrixRequestError(code=404) if the state event is not found.
+        """
+        return self._send("GET", "/rooms/{}/state/{}".format(quote(room_id), event_type))
+
     def send_message_event(self, room_id, event_type, content, txn_id=None,
                            timestamp=None):
         """Perform PUT /rooms/$room_id/send/$event_type
@@ -229,12 +286,10 @@ class MatrixHttpApi(object):
             event_type (str): The event type to send.
             content (dict): The JSON content to send.
             txn_id (int): Optional. The transaction ID to use.
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         if not txn_id:
-            txn_id = str(self.txn_id) + str(int(time() * 1000))
-
-        self.txn_id = self.txn_id + 1
+            txn_id = self._make_txn_id()
 
         path = "/rooms/%s/send/%s/%s" % (
             quote(room_id), quote(event_type), quote(str(txn_id)),
@@ -255,9 +310,8 @@ class MatrixHttpApi(object):
             timestamp(int): Optional. Set origin_server_ts (For application services only)
         """
         if not txn_id:
-            txn_id = str(self.txn_id) + str(int(time() * 1000))
+            txn_id = self._make_txn_id()
 
-        self.txn_id = self.txn_id + 1
         path = '/rooms/%s/redact/%s/%s' % (
             room_id, event_id, txn_id
         )
@@ -297,7 +351,7 @@ class MatrixHttpApi(object):
             name (str): Description for the location.
             thumb_url (str): URL to the thumbnail of the location.
             thumb_info (dict): Metadata about the thumbnail, type ImageInfo.
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         content_pack = {
             "geo_uri": geo_uri,
@@ -318,7 +372,7 @@ class MatrixHttpApi(object):
         Args:
             room_id (str): The room ID to send the event in.
             text_content (str): The m.text body to send.
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         return self.send_message_event(
             room_id, "m.room.message",
@@ -332,7 +386,7 @@ class MatrixHttpApi(object):
         Args:
             room_id (str): The room ID to send the event in.
             text_content (str): The m.emote body to send.
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         return self.send_message_event(
             room_id, "m.room.message",
@@ -346,7 +400,7 @@ class MatrixHttpApi(object):
         Args:
             room_id (str): The room ID to send the event in.
             text_content (str): The m.notice body to send.
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         body = {
             "msgtype": "m.notice",
@@ -383,14 +437,14 @@ class MatrixHttpApi(object):
         Args:
             room_id(str): The room ID
         """
-        return self._send("GET", "/rooms/" + room_id + "/state/m.room.name")
+        return self.get_state_event(room_id, "m.room.name")
 
     def set_room_name(self, room_id, name, timestamp=None):
         """Perform PUT /rooms/$room_id/state/m.room.name
         Args:
             room_id (str): The room ID
             name (str): The new room name
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         body = {
             "name": name
@@ -402,14 +456,14 @@ class MatrixHttpApi(object):
         Args:
             room_id (str): The room ID
         """
-        return self._send("GET", "/rooms/" + room_id + "/state/m.room.topic")
+        return self.get_state_event(room_id, "m.room.topic")
 
     def set_room_topic(self, room_id, topic, timestamp=None):
         """Perform PUT /rooms/$room_id/state/m.room.topic
         Args:
             room_id (str): The room ID
             topic (str): The new room topic
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
         body = {
             "topic": topic
@@ -422,8 +476,7 @@ class MatrixHttpApi(object):
         Args:
             room_id(str): The room ID
         """
-        return self._send("GET", "/rooms/" + quote(room_id) +
-                          "/state/m.room.power_levels")
+        return self.get_state_event(room_id, "m.room.power_levels")
 
     def set_power_levels(self, room_id, content):
         """Perform PUT /rooms/$room_id/state/m.room.power_levels
@@ -432,10 +485,11 @@ class MatrixHttpApi(object):
         in the content arg are reset to default values.
 
         Args:
-            room_id(str): The room ID
-            content(dict): The JSON content to send. See example content below.
+            room_id (str): The room ID
+            content (dict): The JSON content to send. See example content below.
 
-        Usage:
+        Example::
+
             api = MatrixHttpApi("http://example.com", token="foobar")
             api.set_power_levels("!exampleroom:example.com",
                 {
@@ -508,16 +562,19 @@ class MatrixHttpApi(object):
             "/rooms/%s/state/m.room.member/%s" % (room_id, user_id)
         )
 
-    def set_membership(self, room_id, user_id, membership, reason="", profile={},
+    def set_membership(self, room_id, user_id, membership, reason="", profile=None,
                        timestamp=None):
         """Perform PUT /rooms/$room_id/state/m.room.member/$user_id
+
         Args:
             room_id (str): The room ID
             user_id (str): The user ID
             membership (str): New membership value
             reason (str): The reason
-            timestamp (int): Optional. Set origin_server_ts (For application services only)
+            timestamp (int): Set origin_server_ts (For application services only)
         """
+        if profile is None:
+            profile = {}
         body = {
             "membership": membership,
             "reason": reason
@@ -624,8 +681,16 @@ class MatrixHttpApi(object):
                           "/user/{userId}/filter".format(userId=user_id),
                           filter_params)
 
-    def _send(self, method, path, content=None, query_params={}, headers={},
+    def _send(self, method, path, content=None, query_params=None, headers=None,
               api_path=MATRIX_V2_API_PATH):
+        if query_params is None:
+            query_params = {}
+        if headers is None:
+            headers = {}
+
+        if "User-Agent" not in headers:
+            headers["User-Agent"] = "matrix-python-sdk/%s" % __version__
+
         method = method.upper()
         if method not in ["GET", "PUT", "DELETE", "POST"]:
             raise MatrixError("Unsupported HTTP method: %s" % method)
@@ -633,30 +698,42 @@ class MatrixHttpApi(object):
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
 
-        query_params["access_token"] = self.token
+        if self.use_authorization_header:
+            headers["Authorization"] = 'Bearer %s' % self.token
+        else:
+            query_params["access_token"] = self.token
+
         if self.identity:
             query_params["user_id"] = self.identity
 
-        endpoint = self.base_url + api_path + path
+        endpoint = self._base_url + api_path + path
 
         if headers["Content-Type"] == "application/json" and content is not None:
             content = json.dumps(content)
 
-        response = None
         while True:
             try:
-                response = requests.request(
+                response = self.session.request(
                     method, endpoint,
                     params=query_params,
                     data=content,
                     headers=headers,
                     verify=self.validate_cert
                 )
-            except requests.exceptions.RequestException as e:
+            except RequestException as e:
                 raise MatrixHttpLibError(e, method, endpoint)
 
             if response.status_code == 429:
-                sleep(response.json()['retry_after_ms'] / 1000)
+                waittime = self.default_429_wait_ms / 1000
+                try:
+                    waittime = response.json()['retry_after_ms'] / 1000
+                except KeyError:
+                    try:
+                        errordata = json.loads(response.json()['error'])
+                        waittime = errordata['retry_after_ms'] / 1000
+                    except KeyError:
+                        pass
+                sleep(waittime)
             else:
                 break
 
@@ -693,7 +770,7 @@ class MatrixHttpApi(object):
 
     def get_download_url(self, mxcurl):
         if mxcurl.startswith('mxc://'):
-            return self.base_url + "/_matrix/media/r0/download/" + mxcurl[6:]
+            return self._base_url + "/_matrix/media/r0/download/" + mxcurl[6:]
         else:
             raise ValueError("MXC URL did not begin with 'mxc://'")
 
@@ -749,3 +826,188 @@ class MatrixHttpApi(object):
 
         """
         return self._send("GET", "/voip/turnServer")
+
+    def set_join_rule(self, room_id, join_rule):
+        """Set the rule for users wishing to join the room.
+
+        Args:
+            room_id(str): The room to set the rules for.
+            join_rule(str): The chosen rule. One of: ["public", "knock",
+                "invite", "private"]
+        """
+        content = {
+            "join_rule": join_rule
+        }
+        return self.send_state_event(room_id, "m.room.join_rules", content)
+
+    def set_guest_access(self, room_id, guest_access):
+        """Set the guest access policy of the room.
+
+        Args:
+            room_id(str): The room to set the rules for.
+            guest_access(str): Wether guests can join. One of: ["can_join",
+                "forbidden"]
+        """
+        content = {
+            "guest_access": guest_access
+        }
+        return self.send_state_event(room_id, "m.room.guest_access", content)
+
+    def get_devices(self):
+        """Gets information about all devices for the current user."""
+        return self._send("GET", "/devices")
+
+    def get_device(self, device_id):
+        """Gets information on a single device, by device id."""
+        return self._send("GET", "/devices/%s" % device_id)
+
+    def update_device_info(self, device_id, display_name):
+        """Update the display name of a device.
+
+        Args:
+            device_id (str): The device ID of the device to update.
+            display_name (str): New display name for the device.
+        """
+        content = {
+            "display_name": display_name
+        }
+        return self._send("PUT", "/devices/%s" % device_id, content=content)
+
+    def delete_device(self, auth_body, device_id):
+        """Deletes the given device, and invalidates any access token associated with it.
+
+        NOTE: This endpoint uses the User-Interactive Authentication API.
+
+        Args:
+            auth_body (dict): Authentication params.
+            device_id (str): The device ID of the device to delete.
+        """
+        content = {
+            "auth": auth_body
+        }
+        return self._send("DELETE", "/devices/%s" % device_id, content=content)
+
+    def delete_devices(self, auth_body, devices):
+        """Bulk deletion of devices.
+
+        NOTE: This endpoint uses the User-Interactive Authentication API.
+
+        Args:
+            auth_body (dict): Authentication params.
+            devices (list): List of device ID"s to delete.
+        """
+        content = {
+            "auth": auth_body,
+            "devices": devices
+        }
+        return self._send("POST", "/delete_devices", content=content)
+
+    def upload_keys(self, device_keys=None, one_time_keys=None):
+        """Publishes end-to-end encryption keys for the device.
+
+        Said device must be the one used when logging in.
+
+        Args:
+            device_keys (dict): Optional. Identity keys for the device. The required
+                keys are:
+
+                | user_id (str): The ID of the user the device belongs to. Must match
+                    the user ID used when logging in.
+                | device_id (str): The ID of the device these keys belong to. Must match
+                    the device ID used when logging in.
+                | algorithms (list<str>): The encryption algorithms supported by this
+                    device.
+                | keys (dict): Public identity keys. Should be formatted as
+                    <algorithm:device_id>: <key>.
+                | signatures (dict): Signatures for the device key object. Should be
+                    formatted as <user_id>: {<algorithm:device_id>: <key>}
+
+            one_time_keys (dict): Optional. One-time public keys. Should be
+                formatted as <algorithm:key_id>: <key>, the key format being
+                determined by the algorithm.
+        """
+        content = {}
+        if device_keys:
+            content["device_keys"] = device_keys
+        if one_time_keys:
+            content["one_time_keys"] = one_time_keys
+        return self._send("POST", "/keys/upload", content=content)
+
+    def query_keys(self, user_devices, timeout=None, token=None):
+        """Query HS for public keys by user and optionally device.
+
+        Args:
+            user_devices (dict): The devices whose keys to download. Should be
+                formatted as <user_id>: [<device_ids>]. No device_ids indicates
+                all devices for the corresponding user.
+            timeout (int): Optional. The time (in milliseconds) to wait when
+                downloading keys from remote servers.
+            token (str): Optional. If the client is fetching keys as a result of
+                a device update received in a sync request, this should be the
+                'since' token of that sync request, or any later sync token.
+        """
+        content = {"device_keys": user_devices}
+        if timeout:
+            content["timeout"] = timeout
+        if token:
+            content["token"] = token
+        return self._send("POST", "/keys/query", content=content)
+
+    def claim_keys(self, key_request, timeout=None):
+        """Claims one-time keys for use in pre-key messages.
+
+        Args:
+            key_request (dict): The keys to be claimed. Format should be
+                <user_id>: { <device_id>: <algorithm> }.
+            timeout (int): Optional. The time (in milliseconds) to wait when
+                downloading keys from remote servers.
+        """
+        content = {"one_time_keys": key_request}
+        if timeout:
+            content["timeout"] = timeout
+        return self._send("POST", "/keys/claim", content=content)
+
+    def key_changes(self, from_token, to_token):
+        """Gets a list of users who have updated their device identity keys.
+
+        Args:
+            from_token (str): The desired start point of the list. Should be the
+                next_batch field from a response to an earlier call to /sync.
+            to_token (str): The desired end point of the list. Should be the next_batch
+                field from a recent call to /sync - typically the most recent such call.
+        """
+        params = {"from": from_token, "to": to_token}
+        return self._send("GET", "/keys/changes", query_params=params)
+
+    def send_to_device(self, event_type, messages, txn_id=None):
+        """Sends send-to-device events to a set of client devices.
+
+        Args:
+            event_type (str): The type of event to send.
+            messages (dict): The messages to send. Format should be
+                <user_id>: {<device_id>: <event_content>}.
+                The device ID may also be '*', meaning all known devices for the user.
+            txn_id (str): Optional. The transaction ID for this event, will be generated
+                automatically otherwise.
+        """
+        txn_id = txn_id if txn_id else self._make_txn_id()
+        return self._send(
+            "PUT",
+            "/sendToDevice/{}/{}".format(event_type, txn_id),
+            content={"messages": messages}
+        )
+
+    def _make_txn_id(self):
+        txn_id = str(self.txn_id) + str(int(time() * 1000))
+        self.txn_id += 1
+        return txn_id
+
+    def whoami(self):
+        """Determine user_id for authentificated user.
+        """
+        if not self.token:
+            raise MatrixError("Authentification required.")
+        return self._send(
+            "GET",
+            "/account/whoami"
+        )

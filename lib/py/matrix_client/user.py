@@ -1,12 +1,27 @@
+# -*- coding: utf-8 -*-
+# Copyright 2015 OpenMarket Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+from warnings import warn
+
+from .checks import check_user_id
+
+
 class User(object):
     """ The User class can be used to call user specific functions.
     """
     def __init__(self, api, user_id, displayname=None, mxc_avatar_url=None):
-        if not user_id.startswith("@"):
-            raise ValueError("UserIDs start with @")
-
-        if ":" not in user_id:
-            raise ValueError("UserIDs must have a domain component, seperated by a :")
+        check_user_id(user_id)
 
         self.user_id = user_id
         self.displayname = displayname
@@ -15,20 +30,30 @@ class User(object):
         if mxc_avatar_url:
             self.avatar_url = self.api.get_download_url(mxc_avatar_url)
 
-    def get_display_name(self):
-        """ Get this users display name.
-            See also get_friendly_name()
+    def get_display_name(self, room=None):
+        """Get this user's display name.
+
+        Args:
+            room (Room): Optional. When specified, return the display name of the user
+                in this room.
 
         Returns:
-            str: Display Name
+            The display name. Defaults to the user ID if not set.
         """
+        if room:
+            try:
+                return room.members_displaynames[self.user_id]
+            except KeyError:
+                return self.user_id
         if not self.displayname:
             self.displayname = self.api.get_display_name(self.user_id)
-        return self.displayname
+        return self.displayname or self.user_id
 
     def get_friendly_name(self):
-        display_name = self.api.get_display_name(self.user_id)
-        return display_name if display_name is not None else self.user_id
+        """Deprecated. Use :meth:`get_display_name` instead."""
+        warn("get_friendly_name is deprecated. Use get_display_name instead.",
+             DeprecationWarning)
+        return self.get_display_name()
 
     def set_display_name(self, display_name):
         """ Set this users display name.

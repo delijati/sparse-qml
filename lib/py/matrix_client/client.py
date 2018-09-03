@@ -16,13 +16,32 @@ from .api import MatrixHttpApi
 from .errors import MatrixRequestError, MatrixUnexpectedResponse
 from .room import Room
 from .user import User
+try:
+    from .crypto.olm_device import OlmDevice
+    ENCRYPTION_SUPPORT = True
+except ImportError as e:
+    ENCRYPTION_SUPPORT = False
 from threading import Thread
 from time import sleep
 from uuid import uuid4
+from warnings import warn
 import logging
 import sys
 
 logger = logging.getLogger(__name__)
+
+
+# Cache constants used when instantiating Matrix Client to specify level of caching
+class CACHE(int):
+    pass
+
+
+CACHE.NONE = CACHE(-1)
+CACHE.SOME = CACHE(0)
+CACHE.ALL = CACHE(1)
+# TODO: rather than having CACHE.NONE as kwarg to MatrixClient, there should be a separate
+# LightweightMatrixClient that only implements global listeners and doesn't hook into
+# User, Room, etc. classes at all.
 
 
 class MatrixClient(object):
@@ -34,11 +53,16 @@ class MatrixClient(object):
             e.g. (ex: https://localhost:8008 )
         token (Optional[str]): If you have an access token
             supply it here.
-        user_id (Optional[str]): You must supply the user_id
-            (as obtained when initially logging in to obtain
-            the token) if supplying a token; otherwise, ignored.
+        user_id (Optional[str]): Optional. Obsolete. For backward compatibility.
         valid_cert_check (bool): Check the homeservers
             certificate on connections?
+        cache_level (CACHE): One of CACHE.NONE, CACHE.SOME, or
+            CACHE.ALL (defined in module namespace).
+        encryption (bool): Optional. Whether or not to enable end-to-end encryption
+            support.
+        encryption_conf (dict): Optional. Configuration parameters for encryption.
+            Refer to :func:`~matrix_client.crypto.olm_device.OlmDevice` for supported
+            options, since it will be passed to this class.
 
     Returns:
         `MatrixClient`
@@ -60,9 +84,8 @@ class MatrixClient(object):
 
             client = MatrixClient("https://matrix.org", token="foobar",
                 user_id="@foobar:matrix.org")
-            rooms = client.get_rooms()  # NB: From initial sync
             client.add_listener(func)  # NB: event stream callback
-            rooms[0].add_listener(func)  # NB: callbacks just for this room.
+            client.rooms[0].add_listener(func)  # NB: callbacks just for this room.
             room = client.join_room("#matrix:matrix.org")
             response = room.send_text("Hello!")
             response = room.kick("@bob:matrix.org")
@@ -78,13 +101,26 @@ class MatrixClient(object):
             def global_callback(incoming_event):
                 pass
 
+    Attributes:
+        users (dict): A map from user ID to :class:`.User` object.
+            It is populated automatically while tracking the membership in rooms, and
+            shouldn't be modified directly.
+            A :class:`.User` object in this dict is shared between all :class:`.Room`
+            objects where the corresponding user is joined.
     """
 
     def __init__(self, base_url, token=None, user_id=None,
-                 valid_cert_check=True, sync_filter_limit=20):
-        """ Create a new Matrix Client object. """
-        if token is not None and user_id is None:
-            raise ValueError("must supply user_id along with token")
+                 valid_cert_check=True, sync_filter_limit=20,
+                 cache_level=CACHE.ALL, encryption=False, encryption_conf=None):
+        if user_id:
+            warn(
+                "user_id is deprecated. "
+                "Now it is requested from the server.", DeprecationWarning
+            )
+
+        if encryption and not ENCRYPTION_SUPPORT:
+            raise ValueError("Failed to enable encryption. Please make sure the olm "
+                             "library is available.")
 
         self.api = MatrixHttpApi(base_url, token)
         self.api.validate_certificate(valid_cert_check)
@@ -93,6 +129,17 @@ class MatrixClient(object):
         self.invite_listeners = []
         self.left_listeners = []
         self.ephemeral_listeners = []
+        self.device_id = None
+        self._encryption = encryption
+        self.encryption_conf = encryption_conf or {}
+        self.olm_device = None
+        if isinstance(cache_level, CACHE):
+            self._cache_level = cache_level
+        else:
+            self._cache_level = CACHE.ALL
+            raise ValueError(
+                "cache_level must be one of CACHE.NONE, CACHE.SOME, CACHE.ALL"
+            )
 
         self.sync_token = None
         self.sync_filter = '{ "room": { "timeline" : { "limit" : %i } } }' \
@@ -103,19 +150,30 @@ class MatrixClient(object):
             # room_id: Room
         }
         self.user_id = None
+        self.users = {
+            # user_id: User
+        }
         if token:
-            self.user_id = user_id
+            response = self.api.whoami()
+            self.user_id = response["user_id"]
             self._sync()
 
     def get_sync_token(self):
+        warn("get_sync_token is deprecated. Directly access MatrixClient.sync_token.",
+             DeprecationWarning)
         return self.sync_token
 
     def set_sync_token(self, token):
+        warn("set_sync_token is deprecated. Directly access MatrixClient.sync_token.",
+             DeprecationWarning)
         self.sync_token = token
 
     def set_user_id(self, user_id):
+        warn("set_user_id is deprecated. Directly access MatrixClient.user_id.",
+             DeprecationWarning)
         self.user_id = user_id
 
+    # TODO: combine register methods into single register method controlled by kwargs
     def register_as_guest(self):
         """ Register a guest account on this HS.
         Note: HS must have guest registration enabled.
@@ -158,13 +216,56 @@ class MatrixClient(object):
         return self.token
 
     def login_with_password_no_sync(self, username, password):
-        """ Login to the homeserver.
+        """Deprecated. Use ``login`` with ``sync=False``.
+
+        Login to the homeserver.
+
+        Args:
+            username (str): Account username
+            password (str): Account password
+
+        Returns:
+            str: Access token
+
+        Raises:
+            MatrixRequestError
+        """
+        warn("login_with_password_no_sync is deprecated. Use login with sync=False.",
+             DeprecationWarning)
+        return self.login(username, password, sync=False)
+
+    def login_with_password(self, username, password, limit=10):
+        """Deprecated. Use ``login`` with ``sync=True``.
+
+        Login to the homeserver.
 
         Args:
             username (str): Account username
             password (str): Account password
             limit (int): Deprecated. How many messages to return when syncing.
                 This will be replaced by a filter API in a later release.
+
+        Returns:
+            str: Access token
+
+        Raises:
+            MatrixRequestError
+        """
+        warn("login_with_password is deprecated. Use login with sync=True.",
+             DeprecationWarning)
+        return self.login(username, password, limit, sync=True)
+
+    def login(self, username, password, limit=10, sync=True, device_id=None):
+        """Login to the homeserver.
+
+        Args:
+            username (str): Account username
+            password (str): Account password
+            limit (int): Deprecated. How many messages to return when syncing.
+                This will be replaced by a filter API in a later release.
+            sync (bool): Optional. Whether to initiate a /sync request after logging in.
+            device_id (str): Optional. ID of the client device. The server will
+                auto-generate a device_id if this is not specified.
 
         Returns:
             str: Access token
@@ -173,35 +274,25 @@ class MatrixClient(object):
             MatrixRequestError
         """
         response = self.api.login(
-            "m.login.password", user=username, password=password
+            "m.login.password", user=username, password=password, device_id=device_id
         )
         self.user_id = response["user_id"]
         self.token = response["access_token"]
         self.hs = response["home_server"]
         self.api.token = self.token
+        self.device_id = response["device_id"]
+
+        if self._encryption:
+            self.olm_device = OlmDevice(
+                self.api, self.user_id, self.device_id, **self.encryption_conf)
+            self.olm_device.upload_identity_keys()
+            self.olm_device.upload_one_time_keys()
+
+        if sync:
+            """ Limit Filter """
+            self.sync_filter = '{ "room": { "timeline" : { "limit" : %i } } }' % limit
+            self._sync()
         return self.token
-
-    def login_with_password(self, username, password, limit=10):
-        """ Login to the homeserver.
-
-        Args:
-            username (str): Account username
-            password (str): Account password
-            limit (int): Deprecated. How many messages to return when syncing.
-                This will be replaced by a filter API in a later release.
-
-        Returns:
-            str: Access token
-
-        Raises:
-            MatrixRequestError
-        """
-        token = self.login_with_password_no_sync(username, password)
-
-        """ Limit Filter """
-        self.sync_filter = '{ "room": { "timeline" : { "limit" : %i } } }' % limit
-        self._sync()
-        return token
 
     def logout(self):
         """ Logout from the homeserver.
@@ -209,7 +300,9 @@ class MatrixClient(object):
         self.stop_listener_thread()
         self.api.logout()
 
-    def create_room(self, alias=None, is_public=False, invitees=()):
+    # TODO: move room creation/joining to User class for future application service usage
+    # NOTE: we may want to leave thin wrappers here for convenience
+    def create_room(self, alias=None, is_public=False, invitees=None):
         """ Create a new room on the homeserver.
 
         Args:
@@ -249,10 +342,13 @@ class MatrixClient(object):
 
         Returns:
             Room{}: Rooms the user has joined.
-
         """
+        warn("get_rooms is deprecated. Directly access MatrixClient.rooms.",
+             DeprecationWarning)
         return self.rooms
 
+    # TODO: create Listener class and push as much of this logic there as possible
+    # NOTE: listeners related to things in rooms should be attached to Room objects
     def add_listener(self, callback, event_type=None):
         """ Add a listener that will send a callback when the client recieves
         an event.
@@ -265,6 +361,9 @@ class MatrixClient(object):
             uuid.UUID: Unique id of the listener, can be used to identify the listener.
         """
         listener_uid = uuid4()
+        # TODO: listeners should be stored in dict and accessed/deleted directly. Add
+        # convenience method such that MatrixClient.listeners.new(Listener(...)) performs
+        # MatrixClient.listeners[uuid4()] = Listener(...)
         self.listeners.append(
             {
                 'uid': listener_uid,
@@ -354,14 +453,58 @@ class MatrixClient(object):
         self.left_listeners.append(callback)
 
     def listen_for_events(self, timeout_ms=30000):
-        """Deprecated. sync now pulls events from the request.
+        """
         This function just calls _sync()
+
+        In a future version of this sdk, this function will be deprecated and
+        _sync method will be renamed sync with the intention of it being called
+        by downstream code.
 
         Args:
             timeout_ms (int): How long to poll the Home Server for before
                retrying.
         """
+        # TODO: see docstring
         self._sync(timeout_ms)
+
+    def listen_forever(self, timeout_ms=30000, exception_handler=None,
+                       bad_sync_timeout=5):
+        """ Keep listening for events forever.
+
+        Args:
+            timeout_ms (int): How long to poll the Home Server for before
+               retrying.
+            exception_handler (func(exception)): Optional exception handler
+               function which can be used to handle exceptions in the caller
+               thread.
+            bad_sync_timeout (int): Base time to wait after an error before
+                retrying. Will be increased according to exponential backoff.
+        """
+        _bad_sync_timeout = bad_sync_timeout
+        self.should_listen = True
+        while (self.should_listen):
+            try:
+                self._sync(timeout_ms)
+                _bad_sync_timeout = bad_sync_timeout
+            # TODO: we should also handle MatrixHttpLibError for retry in case no response
+            except MatrixRequestError as e:
+                logger.warning("A MatrixRequestError occured during sync.")
+                if e.code >= 500:
+                    logger.warning("Problem occured serverside. Waiting %i seconds",
+                                   bad_sync_timeout)
+                    sleep(bad_sync_timeout)
+                    _bad_sync_timeout = min(_bad_sync_timeout * 2,
+                                            self.bad_sync_timeout_limit)
+                elif exception_handler is not None:
+                    exception_handler(e)
+                else:
+                    raise
+            except Exception as e:
+                logger.exception("Exception thrown during sync")
+                if exception_handler is not None:
+                    exception_handler(e)
+                else:
+                    raise
 
     def start_listener_thread(self, timeout_ms=30000, exception_handler=None):
         """ Start a listener thread to listen for events in the background.
@@ -389,6 +532,7 @@ class MatrixClient(object):
                 self.sync_thread.join()
             self.sync_thread = None
 
+    # TODO: move to User class. Consider creating lightweight Media class.
     def upload(self, content, content_type):
         """ Upload content to the home server and recieve a MXC url.
 
@@ -415,42 +559,20 @@ class MatrixClient(object):
             )
 
     def _mkroom(self, room_id):
-        self.rooms[room_id] = Room(self, room_id)
+        room = Room(self, room_id)
+        if self._encryption:
+            try:
+                event = self.api.get_state_event(room_id, "m.room.encryption")
+                if event["algorithm"] == "m.megolm.v1.aes-sha2":
+                    room.encrypted = True
+            except MatrixRequestError as e:
+                if e.code != 404:
+                    raise
+        self.rooms[room_id] = room
         return self.rooms[room_id]
 
-    def _process_state_event(self, state_event, current_room):
-        if "type" not in state_event:
-            return  # Ignore event
-        etype = state_event["type"]
-
-        if etype == "m.room.name":
-            current_room.name = state_event["content"].get("name", None)
-        elif etype == "m.room.canonical_alias":
-            current_room.canonical_alias = state_event["content"].get("alias")
-        elif etype == "m.room.topic":
-            current_room.topic = state_event["content"].get("topic", None)
-        elif etype == "m.room.aliases":
-            current_room.aliases = state_event["content"].get("aliases", None)
-        elif etype == "m.room.member":
-            if state_event["content"]["membership"] == "join":
-                current_room._mkmembers(
-                    User(self.api,
-                         state_event["state_key"],
-                         state_event["content"].get("displayname", None),
-                         state_event["content"].get("avatar_url", None))
-                )
-            elif state_event["content"]["membership"] in ("leave", "kick", "invite"):
-                current_room._rmmembers(state_event["state_key"])
-
-        for listener in current_room.state_listeners:
-            if (
-                listener['event_type'] is None or
-                listener['event_type'] == state_event['type']
-            ):
-                listener['callback'](state_event)
-
+    # TODO better handling of the blocking I/O caused by update_one_time_key_counts
     def _sync(self, timeout_ms=30000):
-        # TODO: Deal with left rooms
         response = self.api.sync(self.sync_token, timeout_ms, filter=self.sync_filter)
         self.sync_token = response["next_batch"]
 
@@ -468,10 +590,15 @@ class MatrixClient(object):
             if room_id in self.rooms:
                 del self.rooms[room_id]
 
+        if self._encryption and 'device_one_time_keys_count' in response:
+            self.olm_device.update_one_time_key_counts(
+                response['device_one_time_keys_count'])
+
         for room_id, sync_room in response['rooms']['join'].items():
             if room_id not in self.rooms:
                 self._mkroom(room_id)
             room = self.rooms[room_id]
+            # TODO: the rest of this for loop should be in room object method
             room.prev_batch = sync_room["timeline"]["prev_batch"]
 
             # TODO handle unread messages look into https://github.com/matrix-org/matrix-react-sdk/blob/f58d89ef802f28bbab851fe63c3e6ff332394a5d/src/Unread.js#L41
@@ -479,11 +606,14 @@ class MatrixClient(object):
 
             for event in sync_room["state"]["events"]:
                 event['room_id'] = room_id
-                self._process_state_event(event, room)
+                room._process_state_event(event)
 
             for event in sync_room["timeline"]["events"]:
                 event['room_id'] = room_id
                 room._put_event(event)
+
+                # TODO: global listeners can still exist but work by each
+                # room.listeners[uuid] having reference to global listener
 
                 # Dispatch for client (global) listeners
                 for listener in self.listeners:
@@ -499,8 +629,8 @@ class MatrixClient(object):
                 if room.has_unread_messages is None:
                     room.has_unread_messages = self.has_unread_messages(
                         event, sync_room["timeline"]["events"])
-                    # print("Room %s unread: %s" % (room.name or room_id,
-                    #                               room.has_unread_messages))
+                    print("Room %s unread: %s" % (room.name or room_id,
+                                                  room.has_unread_messages))
                 event['room_id'] = room_id
                 room._put_ephemeral_event(event)
 
@@ -547,17 +677,20 @@ class MatrixClient(object):
         return True
 
     def get_user(self, user_id):
-        """ Return a User by their id.
+        """Deprecated. Return a User by their id.
 
-        NOTE: This function only returns a user object, it does not verify
-            the user with the Home Server.
+        This method only instantiate a User, which should be done directly.
+        You can also use :attr:`users` in order to access a User object which
+        was created automatically.
 
         Args:
             user_id (str): The matrix user id of a user.
         """
-
+        warn("get_user is deprecated. Directly instantiate a User instead.",
+             DeprecationWarning)
         return User(self.api, user_id)
 
+    # TODO: move to Room class
     def remove_room_alias(self, room_alias):
         """Remove mapping of an alias
 
