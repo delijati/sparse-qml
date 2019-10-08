@@ -1,4 +1,6 @@
 *.py[cod]
+*.qmlc
+*.jsc
 
 # Packages
 *.egg

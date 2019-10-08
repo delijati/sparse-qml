@@ -125,35 +125,38 @@ class MatrixHttpApi(object):
     def validate_certificate(self, valid):
         self.validate_cert = valid
 
-    def register(self, content=None, kind='user'):
+    def register(self, auth_body=None, kind="user", bind_email=None,
+                 username=None, password=None, device_id=None,
+                 initial_device_display_name=None, inhibit_login=None):
         """Performs /register.
 
         Args:
-            content (dict): The request payload.
-
-                | Should be specified for all non-guest registrations.
-
-                | username (string): The local part of the desired Matrix ID.
-                |     If omitted, the homeserver MUST generate a Matrix ID local part.
-
-                | bind_email (boolean): If true, the server binds the email used for
-                |     authentication to the Matrix ID with the ID Server.
-                |     *Email Registration not currently supported*
-
-                | password (string): Required. The desired password for the account.
-
-                | auth (dict): Authentication Data
-                |     session (string):  The value of the session key given by the
-                |         homeserver.
-
-                |     type (string): Required. The login type that the client is
-                |         attempting to complete. "m.login.dummy" is the only
-                |         non-interactive type.
-
-            kind (str): Specify kind="guest" to register as guest.
+            auth_body (dict): Authentication Params.
+            kind (str): Specify kind of account to register. Can be 'guest' or 'user'.
+            bind_email (bool): Whether to use email in registration and authentication.
+            username (str): The localpart of a Matrix ID.
+            password (str): The desired password of the account.
+            device_id (str): ID of the client device.
+            initial_device_display_name (str): Display name to be assigned.
+            inhibit_login (bool): Whether to login after registration. Defaults to false.
         """
-        if content is None:
-            content = {}
+        content = {}
+        content["kind"] = kind
+        if auth_body:
+            content["auth"] = auth_body
+        if username:
+            content["username"] = username
+        if password:
+            content["password"] = password
+        if device_id:
+            content["device_id"] = device_id
+        if initial_device_display_name:
+            content["initial_device_display_name"] = \
+                    initial_device_display_name
+        if bind_email:
+            content["bind_email"] = bind_email
+        if inhibit_login:
+            content["inhibit_login"] = inhibit_login
         return self._send(
             "POST",
             "/register",
@@ -181,6 +184,10 @@ class MatrixHttpApi(object):
         """Perform /logout.
         """
         return self._send("POST", "/logout")
+
+    def logout_all(self):
+        """Perform /logout/all."""
+        return self._send("POST", "/logout/all")
 
     def create_room(
                 self,
@@ -682,7 +689,7 @@ class MatrixHttpApi(object):
                           filter_params)
 
     def _send(self, method, path, content=None, query_params=None, headers=None,
-              api_path=MATRIX_V2_API_PATH):
+              api_path=MATRIX_V2_API_PATH, return_json=True):
         if query_params is None:
             query_params = {}
         if headers is None:
@@ -741,15 +748,22 @@ class MatrixHttpApi(object):
             raise MatrixRequestError(
                 code=response.status_code, content=response.text
             )
+        if return_json:
+            return response.json()
+        else:
+            return response
 
-        return response.json()
+    def media_upload(self, content, content_type, filename=None):
+        query_params = {}
+        if filename is not None:
+            query_params['filename'] = filename
 
-    def media_upload(self, content, content_type):
         return self._send(
             "POST", "",
             content=content,
             headers={"Content-Type": content_type},
-            api_path="/_matrix/media/r0/upload"
+            api_path="/_matrix/media/r0/upload",
+            query_params=query_params
         )
 
     def get_display_name(self, user_id):
@@ -774,8 +788,87 @@ class MatrixHttpApi(object):
         else:
             raise ValueError("MXC URL did not begin with 'mxc://'")
 
+    def media_download(self, mxcurl, allow_remote=True):
+        """Download raw media from provided mxc URL.
+
+        Args:
+            mxcurl (str): mxc media URL.
+            allow_remote (bool): indicates to the server that it should not
+                attempt to fetch the media if it is deemed remote. Defaults
+                to true if not provided.
+        """
+        query_params = {}
+        if not allow_remote:
+            query_params["allow_remote"] = False
+        if mxcurl.startswith('mxc://'):
+            return self._send(
+                "GET", mxcurl[6:],
+                api_path="/_matrix/media/r0/download/",
+                query_params=query_params,
+                return_json=False
+            )
+        else:
+            raise ValueError(
+                "MXC URL '%s' did not begin with 'mxc://'" % mxcurl
+            )
+
+    def get_thumbnail(self, mxcurl, width, height, method='scale', allow_remote=True):
+        """Download raw media thumbnail from provided mxc URL.
+
+        Args:
+            mxcurl (str): mxc media URL
+            width (int): desired thumbnail width
+            height (int): desired thumbnail height
+            method (str): thumb creation method. Must be
+                in ['scale', 'crop']. Default 'scale'.
+            allow_remote (bool): indicates to the server that it should not
+                attempt to fetch the media if it is deemed remote. Defaults
+                to true if not provided.
+        """
+        if method not in ['scale', 'crop']:
+            raise ValueError(
+                "Unsupported thumb method '%s'" % method
+            )
+        query_params = {
+                    "width": width,
+                    "height": height,
+                    "method": method
+                }
+        if not allow_remote:
+            query_params["allow_remote"] = False
+        if mxcurl.startswith('mxc://'):
+            return self._send(
+                "GET", mxcurl[6:],
+                query_params=query_params,
+                api_path="/_matrix/media/r0/thumbnail/",
+                return_json=False
+            )
+        else:
+            raise ValueError(
+                "MXC URL '%s' did not begin with 'mxc://'" % mxcurl
+            )
+
+    def get_url_preview(self, url, ts=None):
+        """Get preview for URL.
+
+        Args:
+            url (str): URL to get a preview
+            ts (double): The preferred point in time to return
+                 a preview for. The server may return a newer
+                 version if it does not have the requested
+                 version available.
+        """
+        params = {'url': url}
+        if ts:
+            params['ts'] = ts
+        return self._send(
+            "GET", "",
+            query_params=params,
+            api_path="/_matrix/media/r0/preview_url"
+        )
+
     def get_room_id(self, room_alias):
-        """Get room id from its alias
+        """Get room id from its alias.
 
         Args:
             room_alias (str): The room alias name.
@@ -1003,10 +1096,10 @@ class MatrixHttpApi(object):
         return txn_id
 
     def whoami(self):
-        """Determine user_id for authentificated user.
+        """Determine user_id for authenticated user.
         """
         if not self.token:
-            raise MatrixError("Authentification required.")
+            raise MatrixError("Authentication required.")
         return self._send(
             "GET",
             "/account/whoami"
